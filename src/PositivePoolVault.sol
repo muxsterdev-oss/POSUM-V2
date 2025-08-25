@@ -1,24 +1,28 @@
+// src/PositivePoolVault.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-interface IAavePool {
-    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
-    function withdraw(address asset, uint256 amount, address to) external returns (uint256);
+// Interface for Compound V3 on Base
+interface ICompoundV3 {
+    function supply(address asset, uint256 amount) external;
+    function withdraw(address asset, uint256 amount) external;
+    function balanceOf(address account) external view returns (uint256);
 }
 
 contract PositivePoolVault is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
     IERC20 public immutable asset;
-    IERC20 public immutable aToken;
-    IAavePool public constant AAVE_POOL = IAavePool(0x46e6b214b524310239732D51387075E0e70970bf);
+    ICompoundV3 public constant COMPOUND_V3_USDbC = ICompoundV3(0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf);
+    
     uint256 public immutable lockDuration;
-    uint16 public constant FLEX_MULTIPLIER = 100;
-    uint16 public constant LOCKED_MULTIPLIER = 150;
+    uint16 public immutable FLEX_MULTIPLIER;
+    uint16 public immutable LOCKED_MULTIPLIER;
     uint256 public totalFlexShares;
     uint256 public totalLockedShares;
     mapping(address => uint256) public userFlexShares;
@@ -26,6 +30,7 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
     mapping(address => uint256) public userLockEndDate;
     mapping(address => uint256) public userSumPoints;
     mapping(address => uint256) private userLastPointUpdateTime;
+    
     event Deposited(address indexed user, uint256 amount, uint256 sharesIssued, bool isLocked);
     event Withdrawn(address indexed user, uint256 amount, uint256 sharesBurned);
     event LockConverted(address indexed user, uint256 shares);
@@ -35,17 +40,18 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
     constructor(
         address initialOwner,
         address _assetAddress,
-        address _aTokenAddress,
+        uint16 _flexMultiplier,
+        uint16 _lockedMultiplier,
         uint256 _lockDurationSeconds
     ) Ownable(initialOwner) {
-        require(_assetAddress != address(0) && _aTokenAddress != address(0), "Invalid address");
+        require(_assetAddress != address(0), "Invalid address");
         asset = IERC20(_assetAddress);
-        aToken = IERC20(_aTokenAddress);
+        FLEX_MULTIPLIER = _flexMultiplier;
+        LOCKED_MULTIPLIER = _lockedMultiplier;
         lockDuration = _lockDurationSeconds;
     }
 
     function deposit(uint256 _amount, bool _isLocked) external nonReentrant {
-        require(_amount > 0, "Deposit must be > 0");
         _updatePoints(msg.sender);
         uint256 sharesToIssue = previewDeposit(_amount);
         require(sharesToIssue > 0, "Amount too small");
@@ -64,12 +70,13 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
             totalFlexShares += sharesToIssue;
             userFlexShares[msg.sender] += sharesToIssue;
         }
-        _transferAndSupplyToAave(msg.sender, _amount);
+        _transferAndSupplyToCompound(msg.sender, _amount);
         emit Deposited(msg.sender, _amount, sharesToIssue, _isLocked);
     }
 
     function withdraw(uint256 _shares) external nonReentrant {
         require(_shares > 0, "Must withdraw > 0 shares");
+        _convertExpiredLock(msg.sender);
         uint256 userFlexShareBalance = userFlexShares[msg.sender];
         require(_shares <= userFlexShareBalance, "Insufficient flexible shares");
         _withdrawLogic(msg.sender, _shares);
@@ -83,11 +90,13 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
     }
 
     function convertExpiredLock(address _user) public nonReentrant {
+        uint256 lockEndDate = userLockEndDate[_user];
+        require(lockEndDate > 0 && block.timestamp >= lockEndDate, "Lock not expired");
         _convertExpiredLock(_user);
     }
     
     function rescueTokens(address _tokenAddress, address _to, uint256 _amount) external onlyOwner {
-        require(_tokenAddress != address(asset) && _tokenAddress != address(aToken), "Cannot rescue pool assets");
+        require(_tokenAddress != address(asset), "Cannot rescue pool assets");
         IERC20(_tokenAddress).safeTransfer(_to, _amount);
         emit TokenRescued(_tokenAddress, _to, _amount);
     }
@@ -97,10 +106,9 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
         uint256 amountToWithdraw = previewWithdraw(_shares);
         userFlexShares[_user] -= _shares;
         totalFlexShares -= _shares;
-        uint256 actualWithdrawnAmount = AAVE_POOL.withdraw(address(asset), amountToWithdraw, address(this));
-        require(actualWithdrawnAmount > 0, "Aave withdraw failed");
-        asset.safeTransfer(_user, actualWithdrawnAmount);
-        emit Withdrawn(_user, actualWithdrawnAmount, _shares);
+        COMPOUND_V3_USDbC.withdraw(address(asset), amountToWithdraw);
+        asset.safeTransfer(_user, amountToWithdraw);
+        emit Withdrawn(_user, amountToWithdraw, _shares);
     }
     
     function _convertExpiredLock(address _user) private {
@@ -119,11 +127,17 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
         }
     }
 
-    function _transferAndSupplyToAave(address _from, uint256 _amount) private {
+    function _transferAndSupplyToCompound(address _from, uint256 _amount) private {
         asset.safeTransferFrom(_from, address(this), _amount);
-        asset.safeApprove(address(AAVE_POOL), 0);
-        asset.safeApprove(address(AAVE_POOL), _amount);
-        AAVE_POOL.supply(address(asset), _amount, address(this), 0);
+
+        // CORRECTED PATTERN FOR OZ v5:
+        // Increase the allowance for the Compound pool to spend the tokens.
+        uint256 currentAllowance = asset.allowance(address(this), address(COMPOUND_V3_USDbC));
+        if (currentAllowance < _amount) {
+            asset.safeIncreaseAllowance(address(COMPOUND_V3_USDbC), _amount - currentAllowance);
+        }
+
+        COMPOUND_V3_USDbC.supply(address(asset), _amount);
     }
 
     function _updatePoints(address _user) private {
@@ -137,7 +151,7 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
     }
     
     function getContractValue() public view returns (uint256) {
-        return aToken.balanceOf(address(this)) + asset.balanceOf(address(this));
+        return COMPOUND_V3_USDbC.balanceOf(address(this)) + asset.balanceOf(address(this));
     }
 
     function previewDeposit(uint256 _amount) public view returns (uint256 shares) {
@@ -159,8 +173,10 @@ contract PositivePoolVault is Ownable, ReentrancyGuard {
     function getCurrentSumPoints(address _user) public view returns (uint256) {
         uint256 timeElapsed = block.timestamp - userLastPointUpdateTime[_user];
         if (timeElapsed == 0) return userSumPoints[_user];
+        
         uint256 flexPoints = (userFlexShares[_user] * timeElapsed * FLEX_MULTIPLIER) / 100;
         uint256 lockedPoints = (userLockedShares[_user] * timeElapsed * LOCKED_MULTIPLIER) / 100;
+        
         return userSumPoints[_user] + flexPoints + lockedPoints;
     }
 }

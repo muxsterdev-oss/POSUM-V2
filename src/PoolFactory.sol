@@ -1,3 +1,4 @@
+// src/PoolFactory.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -46,18 +47,21 @@ contract PoolFactory is Ownable {
 
     function createPositivePool(
         address _assetAddress,
-        address _aTokenAddress,
         uint256 _lockDurationSeconds
     ) external onlyOwner returns (address) {
-        require(_assetAddress != address(0) && _aTokenAddress != address(0), "Factory: Invalid addresses");
+        require(_assetAddress != address(0), "Factory: Invalid address");
         require(_lockDurationSeconds > 0, "Factory: Lock duration must be > 0");
+
+        // CORRECTED: Call the constructor with the correct 5 arguments for the Compound version.
         PositivePoolVault newPositivePool = new PositivePoolVault(
             owner(),
             _assetAddress,
-            _aTokenAddress,
+            100, // FLEX_MULTIPLIER (1.0x)
+            150, // LOCKED_MULTIPLIER (1.5x)
             _lockDurationSeconds
         );
         address poolAddress = address(newPositivePool);
+
         positivePoolVaults.push(poolAddress);
         poolInfo[poolAddress] = PoolInfo({
             poolType: PoolType.POSITIVE,
