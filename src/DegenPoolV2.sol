@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract DegenPoolV2 is Ownable, ReentrancyGuard {
@@ -34,19 +34,30 @@ contract DegenPoolV2 is Ownable, ReentrancyGuard {
 
     function deposit() external payable nonReentrant {
         require(msg.value > 0, "Deposit must be > 0");
+
+        // Use the same robust update logic as in the claim function
         _updateRewards();
         _updatePoints(msg.sender);
+
         uint256 acc = rewardPerShareStored;
         uint256 _userShares = userShares[msg.sender];
         uint256 pending = (acc * _userShares / 1e18) - userRewardDebt[msg.sender];
         if (pending > 0) {
             rewards[msg.sender] += pending;
         }
+        
+        // This is the crucial update that syncs the debt before adding new shares
+        userRewardDebt[msg.sender] = acc * _userShares / 1e18;
+
+        // Now, add the new shares
         uint256 sharesToIssue = msg.value;
         totalDeposited += sharesToIssue;
         totalShares += sharesToIssue;
-        userShares[msg.sender] = _userShares + sharesToIssue;
-        userRewardDebt[msg.sender] = acc * userShares[msg.sender] / 1e18;
+        userShares[msg.sender] += sharesToIssue;
+
+        // And update the debt again for the newly added shares
+        userRewardDebt[msg.sender] += (acc * sharesToIssue / 1e18);
+
         emit Deposited(msg.sender, msg.value, sharesToIssue);
     }
 
