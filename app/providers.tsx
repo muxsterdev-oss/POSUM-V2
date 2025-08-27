@@ -1,24 +1,33 @@
-"use client";
+// app/providers.tsx
+'use client';
 
-import { type ReactNode } from "react";
-import { base } from "wagmi/chains";
-import { MiniKitProvider } from "@coinbase/onchainkit/minikit";
+import { OnchainKitProvider } from '@coinbase/onchainkit';
+import { WagmiProvider, createConfig, http } from 'wagmi';
+import { mainnet, base } from 'wagmi/chains';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-export function Providers(props: { children: ReactNode }) {
+const queryClient = new QueryClient();
+
+export const config = createConfig({
+  chains: [mainnet, base],
+  transports: {
+    [mainnet.id]: http(),
+    [base.id]: http(),
+  },
+});
+
+// Create a provider component
+export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <MiniKitProvider
-      apiKey={process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY}
-      chain={base}
-      config={{
-        appearance: {
-          mode: "auto",
-          theme: "mini-app-theme",
-          name: process.env.NEXT_PUBLIC_ONCHAINKIT_PROJECT_NAME,
-          logo: process.env.NEXT_PUBLIC_ICON_URL,
-        },
-      }}
+    <OnchainKitProvider
+      chain={base} // Set a default chain
+      wagmiConfig={config}
     >
-      {props.children}
-    </MiniKitProvider>
+      <WagmiProvider config={config}>
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      </WagmiProvider>
+    </OnchainKitProvider>
   );
 }

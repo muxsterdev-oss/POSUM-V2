@@ -2,8 +2,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/app/components/ui/card";
+import { Button } from "@/app/components/ui/button";
 import { useReadContract } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import Link from "next/link";
@@ -49,7 +49,8 @@ export default function LandingPage() {
 
   return (
     <motion.div 
-      className="bg-[#1a1a1a] text-white min-h-screen flex flex-col font-sans relative"
+      // CHANGED: Set background to transparent to let the PixelBackground show through
+      className="bg-transparent text-white min-h-screen flex flex-col font-sans relative"
       variants={containerVariants}
       initial="hidden"
       animate="visible"
@@ -67,9 +68,10 @@ export default function LandingPage() {
         </motion.div>
       </header>
       
-      <main className="flex-grow flex flex-col">
+      {/* CHANGED: Added relative and z-10 to ensure main content is on top of the background */}
+      <main className="relative z-10 flex-grow flex flex-col">
         <motion.section 
-          className="relative z-10 flex-1 flex flex-col justify-center items-center text-center px-6 py-16"
+          className="flex-1 flex flex-col justify-center items-center text-center px-6 py-16"
           variants={itemVariants}
         >
           <h2 className="text-4xl md:text-5xl font-bold mb-6 bg-gradient-to-r from-orange-500 to-amber-300 bg-clip-text text-transparent leading-snug pb-2">Building DeFi's Positive-Sum Future</h2>
@@ -84,12 +86,11 @@ export default function LandingPage() {
         </motion.section>
         
         <motion.section 
-          className="relative z-10 p-10 bg-[#2a2a2a]/90"
+          className="p-10 bg-[#2a2a2a]/90"
           initial="hidden"
           whileInView="visible"
           viewport={{ once: true, amount: 0.2 }}
         >
-          {/* CORRECTED: Moved Platform TVL to the top and removed the old title */}
           <motion.div 
             className="text-center mb-12"
             variants={itemVariants}

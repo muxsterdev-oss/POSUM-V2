@@ -11,7 +11,7 @@ contract DegenPoolV2 is Ownable, ReentrancyGuard {
     mapping(address => uint256) public userShares;
     mapping(address => uint256) public userSumPoints;
     mapping(address => uint256) public rewards;
-    uint256 public constant ANNUAL_PERCENTAGE_RATE_BPS = 500;
+    uint256 public constant ANNUAL_PERCENTAGE_RATE_BPS = 10000; // 100% APY
     uint256 private constant SECONDS_PER_YEAR = 31536000;
     uint256 public immutable YIELD_PER_SECOND_PER_SHARE;
     mapping(address => uint256) private userRewardDebt;

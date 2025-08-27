@@ -1,8 +1,10 @@
+// app/layout.tsx
+
 import "./theme.css";
 import "@coinbase/onchainkit/styles.css";
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import { Providers } from "./providers";
+import ClientProviders from "./client-providers"; // 1. Import the new ClientProviders
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -42,8 +44,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="bg-background">
-        <Providers>{children}</Providers>
+      <body className="bg-[#1a1a1a]">
+        {/* 2. Use the new ClientProviders component */}
+        <ClientProviders>{children}</ClientProviders>
       </body>
     </html>
   );
