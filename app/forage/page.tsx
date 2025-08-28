@@ -8,20 +8,22 @@ import PixelBackground from '@/app/components/PixelBackground';
 import { useAccount } from 'wagmi';
 import { Card, CardContent } from '@/app/components/ui/card';
 import { Button } from '@/app/components/ui/button';
-import { CheckCircle, Twitter, Send, Users, BookOpen } from 'lucide-react';
+import { CheckCircle, Twitter, Send, Users, BookOpen, Megaphone } from 'lucide-react';
 
 // --- Placeholder Data for Missions ---
 const sumOnlyMissions = [
   { id: 1, title: 'Follow the Scent Trail', description: 'Follow POSUM on X', points: 100, icon: <Twitter className="w-5 h-5 text-sky-400" />, completed: true },
-  { id: 2, title: 'Join the Pouch', description: 'Join our Telegram channel', points: 100, icon: <Send className="w-5 h-5 text-blue-500" />, completed: false },
+  { id: 2, title: 'Join the Pouch', description: 'Join our Telegram channel', points: 100, icon: <Send className="w-5 h-5 text-blue-500" />, completed: true }, // Assuming this is also completed to get the badge
   { id: 3, title: 'Grow the Family', description: 'Invite a friend who connects their wallet', points: 250, icon: <Users className="w-5 h-5 text-green-400" />, completed: false },
   { id: 4, title: 'Master the Degen\'s Game', description: 'Read docs on the Degen Pool', points: 50, icon: <BookOpen className="w-5 h-5 text-gray-400" />, completed: false },
 ];
 
 const badgeMissions = [
-  { id: 1, title: 'First Dip', description: 'Make your first deposit into the Positive Pool', points: 500, badge: '💧', completed: false },
-  { id: 2, title: 'The Scavenger', description: 'Claim your first yield from any pool', points: 200, badge: '🌾', completed: false },
-  { id: 3, title: 'Degen\'s Vow', description: 'Make a deposit into the Degen Pool', points: 500, badge: '🔥', completed: true },
+  { id: 1, title: 'First Dip', description: 'Make your first deposit into the Positive Pool', points: 750, badge: '💧', completed: false },
+  { id: 2, title: 'The Scavenger', description: 'Claim your first yield from any pool', points: 250, badge: '🌾', completed: false },
+  { id: 3, title: 'Degen\'s Vow', description: 'Make a deposit into the Degen Pool', points: 1000, badge: '🔥', completed: true },
+  // --- RENAMED THIS MISSION ---
+  { id: 4, title: 'Part of the Colony', description: 'Finish all social tasks', points: 250, badge: '📢', completed: true },
 ];
 
 
@@ -63,7 +65,7 @@ export default function ForagePage() {
             {/* Section for Badge Missions (Cards) */}
             <div className="mb-12">
               <h2 className="text-2xl font-bold mb-4 text-amber-300">Trophy Hunts</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 {badgeMissions.map((mission) => (
                   <Card key={mission.id} className={`bg-[#1e1e1e] border ${mission.completed ? 'border-green-500/50' : 'border-gray-700'} transition-all`}>
                     <CardContent className="p-6 text-center">
@@ -82,7 +84,6 @@ export default function ForagePage() {
 
             {/* Section for SUM-only Missions (Text List) */}
             <div>
-              {/* --- RENAMED THIS SECTION --- */}
               <h2 className="text-2xl font-bold mb-4 text-orange-400">Foraging Grounds</h2>
               <div className="space-y-3">
                 {sumOnlyMissions.map((mission) => (
