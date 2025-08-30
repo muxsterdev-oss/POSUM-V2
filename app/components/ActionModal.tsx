@@ -1,17 +1,20 @@
 // app/components/ActionModal.tsx
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent } from '@/app/components/ui/card';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
-import { useAccount, useBalance } from 'wagmi';
-import { formatUnits } from 'viem';
+import { Checkbox } from '@/app/components/ui/checkbox';
+import { Label } from '@/app/components/ui/label';
+import { parseUnits } from 'viem';
+import { useBalance } from 'wagmi';
+import { useAccount } from 'wagmi';
 
 interface TokenOption {
   symbol: string;
-  address?: `0x${string}`; // Address is optional (for native ETH)
+  address?: `0x${string}`;
   decimals: number;
 }
 
@@ -21,8 +24,10 @@ interface ActionModalProps {
   actionType: 'Deposit' | 'Withdraw' | 'Claim';
   poolName: string;
   tokenOptions?: TokenOption[];
-  onSubmit: (amount: string, selectedToken: TokenOption) => void;
+  onSubmit: (amount: string, selectedToken: TokenOption, isLocked?: boolean) => void;
   isLoading: boolean;
+  allowance?: bigint;
+  onApprove?: (amount: string) => void;
 }
 
 export default function ActionModal({
@@ -30,35 +35,54 @@ export default function ActionModal({
   onClose,
   actionType,
   poolName,
-  tokenOptions,
+  tokenOptions = [],
   onSubmit,
   isLoading,
+  allowance,
+  onApprove,
 }: ActionModalProps) {
   const [amount, setAmount] = useState('');
-  const [selectedToken, setSelectedToken] = useState<TokenOption>(tokenOptions ? tokenOptions[0] : { symbol: 'ETH', decimals: 18 });
+  const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(tokenOptions[0]?.symbol || '');
+  const [isLocked, setIsLocked] = useState(false);
   const { address } = useAccount();
 
-  const { data: balance } = useBalance({
+  useEffect(() => {
+    if (tokenOptions.length > 0) {
+      setSelectedTokenSymbol(tokenOptions[0].symbol);
+    }
+  }, [isOpen, tokenOptions]);
+
+  const selectedToken = useMemo(() => {
+    return tokenOptions.find(t => t.symbol === selectedTokenSymbol) || tokenOptions[0];
+  }, [selectedTokenSymbol, tokenOptions]);
+  
+  const { data: walletBalance } = useBalance({
     address,
-    token: selectedToken.address,
-    query: {
-      enabled: isOpen, // Only fetch when the modal is open
-    },
+    token: selectedToken?.address,
+    watch: true,
   });
 
-  const handleSubmit = () => {
-    onSubmit(amount, selectedToken);
-  };
+  const needsApproval = useMemo(() => {
+    if (actionType !== 'Deposit' || !selectedToken || selectedToken.symbol !== 'USDC' || !amount || !allowance) {
+      return false;
+    }
+    try {
+      const amountBigInt = parseUnits(amount, selectedToken.decimals);
+      return allowance < amountBigInt;
+    } catch (e) {
+      return false;
+    }
+  }, [amount, selectedToken, allowance, actionType]);
 
-  const handleMaxClick = () => {
-    if (balance) {
-      setAmount(balance.formatted);
+  const handleSubmit = () => {
+    if (needsApproval && onApprove) {
+      onApprove(amount);
+    } else {
+      onSubmit(amount, selectedToken, isLocked);
     }
   };
 
-  if (!isOpen) {
-    return null;
-  }
+  if (!isOpen) return null;
 
   return (
     <AnimatePresence>
@@ -78,20 +102,20 @@ export default function ActionModal({
           >
             <Card className="bg-[#2a2a2a] border border-gray-700 w-[400px]">
               <CardContent className="p-6">
-                <h3 className="text-2xl font-bold mb-4 bg-gradient-to-r from-orange-500 to-amber-300 bg-clip-text text-transparent">{`${actionType} ${poolName}`}</h3>
+                <h3 className="text-2xl font-bold mb-4 bg-gradient-to-r from-orange-500 to-amber-300 bg-clip-text text-transparent">{`${actionType} from ${poolName}`}</h3>
                 
                 <div className="space-y-4">
-                  {tokenOptions && actionType === 'Deposit' && (
+                  {tokenOptions.length > 1 && (
                     <div>
                       <label className="text-sm text-gray-400">Select Currency</label>
                       <div className="flex gap-2 mt-1">
                         {tokenOptions.map((token) => (
                           <Button
                             key={token.symbol}
-                            variant={selectedToken.symbol === token.symbol ? 'default' : 'outline'}
-                            onClick={() => setSelectedToken(token)}
+                            variant={selectedTokenSymbol === token.symbol ? 'default' : 'outline'}
+                            onClick={() => setSelectedTokenSymbol(token.symbol)}
                             className={
-                              selectedToken.symbol === token.symbol
+                              selectedTokenSymbol === token.symbol
                                 ? 'bg-orange-500 text-black border-orange-500'
                                 : 'bg-transparent border-gray-600 text-gray-400'
                             }
@@ -104,32 +128,42 @@ export default function ActionModal({
                   )}
 
                   <div>
-                    <div className="flex justify-between items-center">
+                    <div className="flex justify-between items-center mb-1">
                       <label className="text-sm text-gray-400">Amount ({selectedToken.symbol})</label>
                       <span className="text-xs text-gray-500">
-                        Balance: {balance ? parseFloat(balance.formatted).toFixed(4) : '0.00'}
+                        Balance: {parseFloat(walletBalance?.formatted || '0').toFixed(4)}
+                        <Button variant="link" className="text-orange-400 h-auto p-1 ml-1" onClick={() => setAmount(walletBalance?.formatted || '0')}>Max</Button>
                       </span>
                     </div>
-                    <div className="relative">
-                      <Input
-                        type="number"
-                        value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
-                        placeholder="0.0"
-                        className="bg-gray-900 border-gray-700 text-white mt-1 pr-12 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      />
-                      <Button onClick={handleMaxClick} variant="ghost" className="absolute right-1 top-1/2 -translate-y-1/2 h-8 px-2 text-orange-400 hover:bg-gray-800">
-                        Max
-                      </Button>
-                    </div>
+                    <Input
+                      type="number"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder="0.0"
+                      className="bg-gray-900 border-gray-700 text-white [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
                   </div>
+
+                  {poolName.includes('Positive') && actionType === 'Deposit' && (
+                    <div className="flex items-center space-x-2">
+                      <Checkbox 
+                        id="lock-deposit" 
+                        checked={isLocked}
+                        onCheckedChange={(checked) => setIsLocked(checked as boolean)}
+                        className="border-gray-600"
+                      />
+                      <Label htmlFor="lock-deposit" className="text-sm text-gray-300">
+                        Lock deposit for 30 days (1.5x SUM multiplier)
+                      </Label>
+                    </div>
+                  )}
                   
                   <Button
                     onClick={handleSubmit}
                     disabled={isLoading || !amount || parseFloat(amount) <= 0}
                     className="w-full bg-gradient-to-r from-orange-500 to-amber-300 text-black font-semibold rounded-xl"
                   >
-                    {isLoading ? 'Processing...' : `Confirm ${actionType}`}
+                    {isLoading ? 'Processing...' : needsApproval ? `Approve ${selectedToken.symbol}` : `Confirm ${actionType}`}
                   </Button>
                 </div>
 

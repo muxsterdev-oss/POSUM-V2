@@ -1,9 +1,19 @@
+// src/DegenPoolV2.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+// --- 1. ADDED CHAINLINK INTERFACE ---
+interface AggregatorV3Interface {
+  function decimals() external view returns (uint8);
+  function description() external view returns (string memory);
+  function version() external view returns (uint256);
+  function getRoundData(uint80 _roundId) external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
+  function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
+}
 
 contract DegenPoolV2 is Ownable, ReentrancyGuard {
     uint256 public totalDeposited;
@@ -19,15 +29,26 @@ contract DegenPoolV2 is Ownable, ReentrancyGuard {
     uint256 private rewardPerShareStored;
     mapping(address => uint256) private userLastPointUpdateTime;
     address public treasuryWallet;
-    uint256 public constant TREASURY_FEE_BPS = 500;
+    uint256 public constant TREASURY_FEE_BPS = 500; // 5%
+
+    // --- 2. ADDED CHAINLINK PRICE FEED ADDRESS ---
+    AggregatorV3Interface internal priceFeed;
+
     event Deposited(address indexed user, uint256 amount, uint256 sharesIssued);
     event Claimed(address indexed user, uint256 userAmount, uint256 feeAmount);
     event TreasuryWalletUpdated(address newTreasuryWallet);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
 
-    constructor(address initialOwner, address initialTreasury) Ownable(initialOwner) {
+    // --- 3. UPDATED CONSTRUCTOR ---
+    constructor(
+        address initialOwner, 
+        address initialTreasury,
+        address _priceFeedAddress
+    ) Ownable(initialOwner) {
         require(initialTreasury != address(0), "Treasury cannot be zero");
+        require(_priceFeedAddress != address(0), "Price feed cannot be zero");
         treasuryWallet = initialTreasury;
+        priceFeed = AggregatorV3Interface(_priceFeedAddress);
         lastUpdateTime = block.timestamp;
         YIELD_PER_SECOND_PER_SHARE = (1e18 * ANNUAL_PERCENTAGE_RATE_BPS) / 10000 / SECONDS_PER_YEAR;
     }
@@ -35,7 +56,6 @@ contract DegenPoolV2 is Ownable, ReentrancyGuard {
     function deposit() external payable nonReentrant {
         require(msg.value > 0, "Deposit must be > 0");
 
-        // Use the same robust update logic as in the claim function
         _updateRewards();
         _updatePoints(msg.sender);
 
@@ -46,16 +66,13 @@ contract DegenPoolV2 is Ownable, ReentrancyGuard {
             rewards[msg.sender] += pending;
         }
         
-        // This is the crucial update that syncs the debt before adding new shares
         userRewardDebt[msg.sender] = acc * _userShares / 1e18;
 
-        // Now, add the new shares
         uint256 sharesToIssue = msg.value;
         totalDeposited += sharesToIssue;
         totalShares += sharesToIssue;
         userShares[msg.sender] += sharesToIssue;
 
-        // And update the debt again for the newly added shares
         userRewardDebt[msg.sender] += (acc * sharesToIssue / 1e18);
 
         emit Deposited(msg.sender, msg.value, sharesToIssue);
@@ -96,11 +113,20 @@ contract DegenPoolV2 is Ownable, ReentrancyGuard {
         emit TokenRescued(_tokenAddress, _to, _amount);
     }
     
+    // --- 4. UPDATED POINTS LOGIC ---
     function _updatePoints(address _user) private {
         uint256 _userShares = userShares[_user];
         if (_userShares > 0) {
             uint256 timeElapsed = block.timestamp - userLastPointUpdateTime[_user];
-            uint256 newPoints = _userShares * timeElapsed;
+            
+            (, int price, , , ) = priceFeed.latestRoundData();
+            uint256 ethPrice = uint256(price); // Price has 8 decimals
+            
+            // Convert shares (ETH in wei) to USD value with 18 decimals for precision
+            uint256 usdValue = (_userShares * ethPrice) / 1e8; 
+            
+            // 2x multiplier for Degen Pool
+            uint256 newPoints = (usdValue * timeElapsed * 2);
             userSumPoints[_user] += newPoints;
         }
         userLastPointUpdateTime[_user] = block.timestamp;
@@ -131,11 +157,19 @@ contract DegenPoolV2 is Ownable, ReentrancyGuard {
         return rewardPerShareStored + (timeElapsed * YIELD_PER_SECOND_PER_SHARE);
     }
 
+    // --- 5. UPDATED POINTS VIEW FUNCTION ---
     function getCurrentSumPoints(address _user) public view returns (uint256) {
         uint256 _userShares = userShares[_user];
         if (_userShares == 0) { return userSumPoints[_user]; }
+
         uint256 timeElapsed = block.timestamp - userLastPointUpdateTime[_user];
-        uint256 unUpdatedPoints = _userShares * timeElapsed;
+        
+        (, int price, , , ) = priceFeed.latestRoundData();
+        uint256 ethPrice = uint256(price);
+
+        uint256 usdValue = (_userShares * ethPrice) / 1e8;
+        
+        uint256 unUpdatedPoints = (usdValue * timeElapsed * 2);
         return userSumPoints[_user] + unUpdatedPoints;
     }
 }

@@ -30,15 +30,23 @@ contract PoolFactory is Ownable {
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
-    function createDegenPool(address _treasuryWallet) external onlyOwner returns (address) {
+    // --- UPDATED THIS FUNCTION ---
+    function createDegenPool(
+        address _treasuryWallet, 
+        address _priceFeedAddress
+    ) external onlyOwner returns (address) {
         require(_treasuryWallet != address(0), "Factory: Treasury cannot be zero address");
-        DegenPoolV2 newDegenPool = new DegenPoolV2(owner(), _treasuryWallet);
+        require(_priceFeedAddress != address(0), "Factory: Price feed cannot be zero address");
+        
+        // Now passing all three required arguments
+        DegenPoolV2 newDegenPool = new DegenPoolV2(owner(), _treasuryWallet, _priceFeedAddress);
+        
         address poolAddress = address(newDegenPool);
         degenPools.push(poolAddress);
         poolInfo[poolAddress] = PoolInfo({
             poolType: PoolType.DEGEN,
             poolAddress: poolAddress,
-            assetAddress: address(0),
+            assetAddress: address(0), // ETH pool
             createdAt: block.timestamp
         });
         emit PoolCreated(PoolType.DEGEN, poolAddress, address(0), owner());
@@ -52,7 +60,6 @@ contract PoolFactory is Ownable {
         require(_assetAddress != address(0), "Factory: Invalid address");
         require(_lockDurationSeconds > 0, "Factory: Lock duration must be > 0");
 
-        // CORRECTED: Call the constructor with the correct 5 arguments for the Compound version.
         PositivePoolVault newPositivePool = new PositivePoolVault(
             owner(),
             _assetAddress,

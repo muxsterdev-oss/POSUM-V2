@@ -3,29 +3,28 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "forge-std/console.sol";
-import "../src/PositivePoolVault.sol"; // This file already contains the ICompoundV3 interface
+import "src/PositivePoolVault.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract PositivePoolVaultTest is Test {
-    uint256 forkId;
     PositivePoolVault vault;
     
-    IERC20 constant USDbC = IERC20(0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA);
-    // We get the ICompoundV3 type from importing PositivePoolVault.sol
-    ICompoundV3 constant COMPOUND_V3_USDbC = ICompoundV3(0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf);
+    // --- CORRECTED ADDRESSES FOR BASE SEPOLIA ---
+    IERC20 constant USDbC = IERC20(0x036CbD53842c5426634e7929541eC2318f3dCF7e);
+    ICompoundV3 constant COMPOUND_V3_USDbC = ICompoundV3(0x45E054f5541C13437149226312e432073D6b422b);
+    address constant COMPOUND_MARKET_OWNER = 0x1242940283b2721a52836248D6139C5c5521873b;
     
     address owner = address(this);
     address user1 = address(0x123);
-    address usdbcWhale = 0x4f3a120e72c7e920526E36848289a326402a3515;
 
     uint256 constant LOCK_DURATION = 30 days;
     uint16 constant FLEX_MULTIPLIER = 100;
     uint16 constant LOCKED_MULTIPLIER = 150;
 
     function setUp() public {
-        forkId = vm.createFork(vm.rpcUrl("base"), 15133600);
-        vm.selectFork(forkId);
+        // --- FORK BASE SEPOLIA FOR CONSISTENCY ---
+        string memory baseURL = vm.envString("BASE_RPC_URL");
+        vm.createSelectFork(baseURL);
 
         vault = new PositivePoolVault(
             owner,
@@ -34,6 +33,10 @@ contract PositivePoolVaultTest is Test {
             LOCKED_MULTIPLIER,
             LOCK_DURATION
         );
+
+        // --- GRANT PERMISSION TO THE VAULT ---
+        vm.prank(COMPOUND_MARKET_OWNER);
+        COMPOUND_V3_USDbC.allow(address(vault), true);
     }
 
     function test_Deposit_Flex_And_SuppliesToCompound() public {
