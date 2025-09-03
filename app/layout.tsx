@@ -1,15 +1,14 @@
 // app/layout.tsx
-
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
-import ClientProviders from "./client-providers";
-import { VT323 } from "next/font/google";
+import { Providers } from "./providers";
 
-const vt323 = VT323({ subsets: ["latin"], weight: "400" });
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "POSUM Protocol",
-  description: "A gamified, multi-chain yield and liquidity protocol.",
+  description: "Gamified Yield Protocol",
 };
 
 export default function RootLayout({
@@ -19,8 +18,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${vt323.className} bg-[#1a1a1a]`}>
-        <ClientProviders>{children}</ClientProviders>
+      <body className={inter.className}>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

@@ -3,11 +3,11 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Card, CardContent } from '@/app/components/ui/card';
-import { Button } from '@/app/components/ui/button';
-import { Input } from '@/app/components/ui/input';
-import { Checkbox } from '@/app/components/ui/checkbox';
-import { Label } from '@/app/components/ui/label';
+import { Card, CardContent } from './ui/card';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Checkbox } from './ui/checkbox';
+import { Label } from './ui/label';
 import { parseUnits } from 'viem';
 import { useBalance } from 'wagmi';
 import { useAccount } from 'wagmi';
@@ -47,7 +47,7 @@ export default function ActionModal({
   const { address } = useAccount();
 
   useEffect(() => {
-    if (tokenOptions.length > 0) {
+    if (isOpen && tokenOptions.length > 0) {
       setSelectedTokenSymbol(tokenOptions[0].symbol);
     }
   }, [isOpen, tokenOptions]);
@@ -59,11 +59,10 @@ export default function ActionModal({
   const { data: walletBalance } = useBalance({
     address,
     token: selectedToken?.address,
-    watch: true,
   });
 
   const needsApproval = useMemo(() => {
-    if (actionType !== 'Deposit' || !selectedToken || selectedToken.symbol !== 'USDC' || !amount || !allowance) {
+    if (actionType !== 'Deposit' || !selectedToken || selectedToken.symbol !== 'USDC' || !amount || allowance === undefined) {
       return false;
     }
     try {
@@ -178,3 +177,4 @@ export default function ActionModal({
     </AnimatePresence>
   );
 }
+

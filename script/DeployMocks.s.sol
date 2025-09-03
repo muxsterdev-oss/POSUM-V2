@@ -8,9 +8,10 @@ import "src/mocks/MockUSDC.sol";
 contract DeployMocks is Script {
     function run() external returns (address) {
         vm.startBroadcast();
-        MockUSDC mockUSDC = new MockUSDC();
-        console.log("Mock USDC Deployed at:", address(mockUSDC));
+        // --- CORRECTED VARIABLE NAME ---
+        MockUSDC mockUsdc = new MockUSDC();
+        console.log("Mock USDC Deployed at:", address(mockUsdc));
         vm.stopBroadcast();
-        return address(mockUSDC);
+        return address(mockUsdc);
     }
 }

@@ -3,180 +3,270 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./interfaces/IChainlink.sol";
 
-// Interface for Compound V3 on Base
 interface ICompoundV3 {
-    function supply(address asset, uint256 amount) external;
-    function withdraw(address asset, uint256 amount) external;
+    function supply(address asset, uint amount) external;
+    function withdraw(address asset, uint amount) external;
+    function claim(address asset, address src, address to, uint amount) external;
+    function getRewardOwed(address account) external view returns (address, uint256);
     function balanceOf(address account) external view returns (uint256);
 }
 
 contract PositivePoolVault is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    IERC20 public immutable asset;
-    ICompoundV3 public constant COMPOUND_V3_USDbC = ICompoundV3(0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf);
-    
-    uint256 public immutable lockDuration;
-    uint16 public immutable FLEX_MULTIPLIER;
-    uint16 public immutable LOCKED_MULTIPLIER;
+    IERC20 public immutable ASSET;
+    ICompoundV3 public immutable COMPOUND_V3_USDC;
+    AggregatorV3Interface internal immutable PRICE_FEED;
+    IERC20 public immutable REWARD_TOKEN;
+
     uint256 public totalFlexShares;
     uint256 public totalLockedShares;
     mapping(address => uint256) public userFlexShares;
     mapping(address => uint256) public userLockedShares;
     mapping(address => uint256) public userLockEndDate;
     mapping(address => uint256) public userSumPoints;
+    
+    mapping(address => uint256) public rewards;
+    uint256 private rewardPerShareStored;
+    uint256 public lastUpdateTime;
+    mapping(address => uint256) private userRewardDebt;
+    uint256 private lastTotalExternalRewards;
+    
     mapping(address => uint256) private userLastPointUpdateTime;
     
+    uint16 public immutable FLEX_MULTIPLIER_BPS;
+    uint16 public immutable LOCKED_MULTIPLIER_BPS;
+    uint256 public immutable LOCK_DURATION;
+
     event Deposited(address indexed user, uint256 amount, uint256 sharesIssued, bool isLocked);
     event Withdrawn(address indexed user, uint256 amount, uint256 sharesBurned);
-    event LockConverted(address indexed user, uint256 shares);
-    event LockExtended(address indexed user, uint256 newEndDate);
+    event YieldClaimed(address indexed user, uint256 amount);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
 
     constructor(
         address initialOwner,
         address _assetAddress,
-        uint16 _flexMultiplier,
-        uint16 _lockedMultiplier,
+        address _compoundMarketAddress,
+        address _rewardTokenAddress,
+        address _priceFeedAddress,
+        uint16 _flexMultiplierBps,
+        uint16 _lockedMultiplierBps,
         uint256 _lockDurationSeconds
     ) Ownable(initialOwner) {
-        require(_assetAddress != address(0), "Invalid address");
-        asset = IERC20(_assetAddress);
-        FLEX_MULTIPLIER = _flexMultiplier;
-        LOCKED_MULTIPLIER = _lockedMultiplier;
-        lockDuration = _lockDurationSeconds;
+        require(_assetAddress != address(0) && _compoundMarketAddress != address(0) && _priceFeedAddress != address(0) && _rewardTokenAddress != address(0), "Invalid addresses");
+        require(_flexMultiplierBps > 0 && _lockedMultiplierBps > 0, "Multipliers must be > 0");
+
+        ASSET = IERC20(_assetAddress);
+        COMPOUND_V3_USDC = ICompoundV3(_compoundMarketAddress);
+        REWARD_TOKEN = IERC20(_rewardTokenAddress);
+        PRICE_FEED = AggregatorV3Interface(_priceFeedAddress);
+        FLEX_MULTIPLIER_BPS = _flexMultiplierBps;
+        LOCKED_MULTIPLIER_BPS = _lockedMultiplierBps;
+        LOCK_DURATION = _lockDurationSeconds;
+        lastUpdateTime = block.timestamp;
+
+        // --- CORRECTED THIS LINE ---
+        // Set a one-time, maximum allowance for the Compound protocol
+        ASSET.approve(address(COMPOUND_V3_USDC), type(uint256).max);
     }
 
     function deposit(uint256 _amount, bool _isLocked) external nonReentrant {
+        require(_amount > 0, "Amount too small");
+        
+        _updateRewards(msg.sender);
         _updatePoints(msg.sender);
-        uint256 sharesToIssue = previewDeposit(_amount);
-        require(sharesToIssue > 0, "Amount too small");
+        
+        ASSET.safeTransferFrom(msg.sender, address(this), _amount);
+        COMPOUND_V3_USDC.supply(address(ASSET), _amount);
+
+        uint256 multiplier = _isLocked ? LOCKED_MULTIPLIER_BPS : FLEX_MULTIPLIER_BPS;
+        uint256 sharesToIssue = (_amount * multiplier) / 10000;
+        
         if (_isLocked) {
-            totalLockedShares += sharesToIssue;
+            require(userLockedShares[msg.sender] == 0, "Locked position already exists");
             userLockedShares[msg.sender] += sharesToIssue;
-            uint256 newLockEndDate;
-            if (block.timestamp > userLockEndDate[msg.sender]) {
-                newLockEndDate = block.timestamp + lockDuration;
-            } else {
-                newLockEndDate = userLockEndDate[msg.sender] + lockDuration;
-            }
-            userLockEndDate[msg.sender] = newLockEndDate;
-            emit LockExtended(msg.sender, newLockEndDate);
+            totalLockedShares += sharesToIssue;
+            userLockEndDate[msg.sender] = block.timestamp + LOCK_DURATION;
         } else {
-            totalFlexShares += sharesToIssue;
             userFlexShares[msg.sender] += sharesToIssue;
+            totalFlexShares += sharesToIssue;
         }
-        _transferAndSupplyToCompound(msg.sender, _amount);
+        
+        userRewardDebt[msg.sender] = getRewardPerShare() * (userFlexShares[msg.sender] + userLockedShares[msg.sender]) / 1e18;
         emit Deposited(msg.sender, _amount, sharesToIssue, _isLocked);
+    }
+    
+    function claimYield() external nonReentrant {
+        _updateRewards(msg.sender);
+        uint256 claimable = rewards[msg.sender];
+        require(claimable > 0, "No yield to claim");
+
+        rewards[msg.sender] = 0;
+        
+        COMPOUND_V3_USDC.claim(address(REWARD_TOKEN), address(this), address(this), claimable);
+        REWARD_TOKEN.safeTransfer(msg.sender, claimable);
+        
+        lastTotalExternalRewards = _getRewardOwedFromCompound();
+        
+        emit YieldClaimed(msg.sender, claimable);
     }
 
     function withdraw(uint256 _shares) external nonReentrant {
         require(_shares > 0, "Must withdraw > 0 shares");
-        _convertExpiredLock(msg.sender);
-        uint256 userFlexShareBalance = userFlexShares[msg.sender];
-        require(_shares <= userFlexShareBalance, "Insufficient flexible shares");
-        _withdrawLogic(msg.sender, _shares);
-    }
-    
-    function withdrawMax() external nonReentrant {
-        _convertExpiredLock(msg.sender);
-        uint256 userFlexShareBalance = userFlexShares[msg.sender];
-        require(userFlexShareBalance > 0, "No flexible shares to withdraw");
-        _withdrawLogic(msg.sender, userFlexShareBalance);
-    }
-
-    function convertExpiredLock(address _user) public nonReentrant {
-        uint256 lockEndDate = userLockEndDate[_user];
-        require(lockEndDate > 0 && block.timestamp >= lockEndDate, "Lock not expired");
-        _convertExpiredLock(_user);
-    }
-    
-    function rescueTokens(address _tokenAddress, address _to, uint256 _amount) external onlyOwner {
-        require(_tokenAddress != address(asset), "Cannot rescue pool assets");
-        IERC20(_tokenAddress).safeTransfer(_to, _amount);
-        emit TokenRescued(_tokenAddress, _to, _amount);
-    }
-    
-    function _withdrawLogic(address _user, uint256 _shares) private {
-        _updatePoints(_user);
-        uint256 amountToWithdraw = previewWithdraw(_shares);
-        userFlexShares[_user] -= _shares;
+        require(userFlexShares[msg.sender] >= _shares, "Insufficient flexible shares");
+        
+        _updateRewards(msg.sender);
+        _updatePoints(msg.sender);
+        
+        userFlexShares[msg.sender] -= _shares;
         totalFlexShares -= _shares;
-        COMPOUND_V3_USDbC.withdraw(address(asset), amountToWithdraw);
-        asset.safeTransfer(_user, amountToWithdraw);
-        emit Withdrawn(_user, amountToWithdraw, _shares);
+
+        uint256 amountToWithdraw = previewWithdrawFlex(_shares);
+
+        COMPOUND_V3_USDC.withdraw(address(ASSET), amountToWithdraw);
+        ASSET.safeTransfer(msg.sender, amountToWithdraw);
+        
+        userRewardDebt[msg.sender] = getRewardPerShare() * (userFlexShares[msg.sender] + userLockedShares[msg.sender]) / 1e18;
+        emit Withdrawn(msg.sender, amountToWithdraw, _shares);
     }
     
-    function _convertExpiredLock(address _user) private {
-        uint256 lockEndDate = userLockEndDate[_user];
-        if (lockEndDate > 0 && block.timestamp >= lockEndDate) {
-            _updatePoints(_user);
-            uint256 sharesToConvert = userLockedShares[_user];
-            if (sharesToConvert > 0) {
-                userLockedShares[_user] = 0;
-                totalLockedShares -= sharesToConvert;
-                userFlexShares[_user] += sharesToConvert;
-                totalFlexShares += sharesToConvert;
-                userLockEndDate[_user] = 0;
-                emit LockConverted(_user, sharesToConvert);
-            }
-        }
+    function withdrawLocked() external nonReentrant {
+        require(block.timestamp >= userLockEndDate[msg.sender], "Lock period not expired");
+        uint256 sharesToWithdraw = userLockedShares[msg.sender];
+        require(sharesToWithdraw > 0, "No locked shares to withdraw");
+
+        _updateRewards(msg.sender);
+        _updatePoints(msg.sender);
+
+        userLockedShares[msg.sender] = 0;
+        totalLockedShares -= sharesToWithdraw;
+        userLockEndDate[msg.sender] = 0;
+
+        uint256 amountToWithdraw = previewWithdrawLocked(sharesToWithdraw);
+
+        COMPOUND_V3_USDC.withdraw(address(ASSET), amountToWithdraw);
+        ASSET.safeTransfer(msg.sender, amountToWithdraw);
+
+        userRewardDebt[msg.sender] = getRewardPerShare() * (userFlexShares[msg.sender] + userLockedShares[msg.sender]) / 1e18;
+        emit Withdrawn(msg.sender, amountToWithdraw, sharesToWithdraw);
     }
-
-    function _transferAndSupplyToCompound(address _from, uint256 _amount) private {
-        asset.safeTransferFrom(_from, address(this), _amount);
-
-        // CORRECTED PATTERN FOR OZ v5:
-        // Increase the allowance for the Compound pool to spend the tokens.
-        uint256 currentAllowance = asset.allowance(address(this), address(COMPOUND_V3_USDbC));
-        if (currentAllowance < _amount) {
-            asset.safeIncreaseAllowance(address(COMPOUND_V3_USDbC), _amount - currentAllowance);
+    
+    function rescueTokens(address _token, address _to, uint256 _amount) external onlyOwner {
+        require(_to != address(0), "Zero address");
+        require(_token != address(ASSET), "Cannot rescue pool asset");
+        require(_token != address(REWARD_TOKEN), "Cannot rescue reward asset");
+        IERC20(_token).safeTransfer(_to, _amount);
+        emit TokenRescued(_token, _to, _amount);
+    }
+    
+    function _updateRewards(address _user) private {
+        uint256 totalShares = totalFlexShares + totalLockedShares;
+        uint256 totalRewards = _getRewardOwedFromCompound();
+        
+        if (totalRewards > lastTotalExternalRewards && totalShares > 0) {
+            uint256 delta = totalRewards - lastTotalExternalRewards;
+            rewardPerShareStored += (delta * 1e18) / totalShares;
         }
+        lastTotalExternalRewards = totalRewards;
 
-        COMPOUND_V3_USDbC.supply(address(asset), _amount);
+        uint256 userTotalShares = userFlexShares[_user] + userLockedShares[_user];
+        if (userTotalShares > 0) {
+            uint256 pending = (rewardPerShareStored * userTotalShares / 1e18) - userRewardDebt[_user];
+            if (pending > 0) rewards[_user] += pending;
+        }
+        userRewardDebt[_user] = rewardPerShareStored * userTotalShares / 1e18;
+        lastUpdateTime = block.timestamp;
     }
 
     function _updatePoints(address _user) private {
-        uint256 timeElapsed = block.timestamp - userLastPointUpdateTime[_user];
-        if (timeElapsed > 0) {
-            uint256 flexPoints = (userFlexShares[_user] * timeElapsed * FLEX_MULTIPLIER) / 100;
-            uint256 lockedPoints = (userLockedShares[_user] * timeElapsed * LOCKED_MULTIPLIER) / 100;
-            userSumPoints[_user] += flexPoints + lockedPoints;
+        if (userLastPointUpdateTime[_user] == 0) {
+            userLastPointUpdateTime[_user] = block.timestamp;
+            return;
+        }
+        
+        uint256 userTotalShares = userFlexShares[_user] + userLockedShares[_user];
+        if (userTotalShares > 0) {
+            uint256 timeElapsed = block.timestamp - userLastPointUpdateTime[_user];
+            if (timeElapsed > 365 days) timeElapsed = 365 days;
+
+            uint256 usdValue = previewWithdrawFlex(userFlexShares[_user]) + previewWithdrawLocked(userLockedShares[_user]);
+            uint256 price = _getLatestPrice();
+            uint256 normalizedValue = (usdValue * price) / (10 ** ASSET.decimals());
+
+            uint256 newPoints = (normalizedValue * timeElapsed);
+            userSumPoints[_user] += newPoints;
         }
         userLastPointUpdateTime[_user] = block.timestamp;
     }
     
+    function _getLatestPrice() internal view returns (uint256) {
+        (, int256 price, , uint256 updatedAt, ) = PRICE_FEED.latestRoundData();
+        require(price > 0, "PositivePool: Invalid price");
+        require(block.timestamp - updatedAt < 1 hours, "PositivePool: Stale price");
+        
+        uint8 decimals = PRICE_FEED.decimals();
+        if (decimals == 18) return uint256(price);
+        if (decimals < 18) return uint256(price) * (10 ** (18 - decimals));
+        return uint256(price) / (10 ** (decimals - 18));
+    }
+
     function getContractValue() public view returns (uint256) {
-        return COMPOUND_V3_USDbC.balanceOf(address(this)) + asset.balanceOf(address(this));
+        return COMPOUND_V3_USDC.balanceOf(address(this)) + ASSET.balanceOf(address(this));
+    }
+    
+    function claimableYield(address _user) public view returns (uint256) {
+        return rewards[_user] + getPendingRewards(_user);
     }
 
-    function previewDeposit(uint256 _amount) public view returns (uint256 shares) {
-        uint256 totalAssetValue = getContractValue();
-        uint256 _totalShares = totalFlexShares + totalLockedShares;
-        if (_totalShares == 0) {
-            require(totalAssetValue == 0, "Initial deposit mispricing");
-            return _amount;
-        }
-        return (_amount * _totalShares) / totalAssetValue;
+    function getPendingRewards(address _user) public view returns (uint256) {
+        uint256 userTotalShares = userFlexShares[_user] + userLockedShares[_user];
+        if (userTotalShares == 0) return 0;
+        uint256 acc = getRewardPerShare();
+        return (acc * userTotalShares / 1e18) - userRewardDebt[_user];
+    }
+    
+    function getRewardPerShare() public view returns (uint256) {
+        uint256 totalShares = totalFlexShares + totalLockedShares;
+        if (totalShares == 0) { return rewardPerShareStored; }
+        
+        uint256 totalRewards = _getRewardOwedFromCompound();
+        uint256 delta = totalRewards > lastTotalExternalRewards ? totalRewards - lastTotalExternalRewards : 0;
+        
+        return rewardPerShareStored + (delta * 1e18 / totalShares);
     }
 
-    function previewWithdraw(uint256 _shares) public view returns (uint256 amount) {
-        uint256 _totalShares = totalFlexShares + totalLockedShares;
-        if (_totalShares == 0) return 0;
-        return (_shares * getContractValue()) / _totalShares;
+    function previewWithdrawFlex(uint256 _shares) public view returns (uint256) {
+        return (_shares * 10000) / FLEX_MULTIPLIER_BPS;
     }
 
+    function previewWithdrawLocked(uint256 _shares) public view returns (uint256) {
+        return (_shares * 10000) / LOCKED_MULTIPLIER_BPS;
+    }
+    
     function getCurrentSumPoints(address _user) public view returns (uint256) {
+        if (userLastPointUpdateTime[_user] == 0) return userSumPoints[_user];
+        
+        uint256 userTotalShares = userFlexShares[_user] + userLockedShares[_user];
+        if (userTotalShares == 0) return userSumPoints[_user];
+
         uint256 timeElapsed = block.timestamp - userLastPointUpdateTime[_user];
-        if (timeElapsed == 0) return userSumPoints[_user];
-        
-        uint256 flexPoints = (userFlexShares[_user] * timeElapsed * FLEX_MULTIPLIER) / 100;
-        uint256 lockedPoints = (userLockedShares[_user] * timeElapsed * LOCKED_MULTIPLIER) / 100;
-        
-        return userSumPoints[_user] + flexPoints + lockedPoints;
+        if (timeElapsed > 365 days) timeElapsed = 365 days;
+
+        uint256 usdValue = previewWithdrawFlex(userFlexShares[_user]) + previewWithdrawLocked(userLockedShares[_user]);
+        uint256 price = _getLatestPrice();
+        uint256 normalizedValue = (usdValue * price) / (10 ** ASSET.decimals());
+
+        uint256 unUpdatedPoints = (normalizedValue * timeElapsed);
+        return userSumPoints[_user] + unUpdatedPoints;
+    }
+
+    function _getRewardOwedFromCompound() internal view returns (uint256) {
+        (address rewardToken, uint256 amount) = COMPOUND_V3_USDC.getRewardOwed(address(this));
+        require(rewardToken == address(REWARD_TOKEN), "Reward token mismatch");
+        return amount;
     }
 }

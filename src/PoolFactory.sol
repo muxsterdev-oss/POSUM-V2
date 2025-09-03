@@ -30,16 +30,15 @@ contract PoolFactory is Ownable {
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
-    // --- UPDATED THIS FUNCTION ---
     function createDegenPool(
         address _treasuryWallet, 
-        address _priceFeedAddress
+        address _priceFeedAddress,
+        uint256 _aprBps
     ) external onlyOwner returns (address) {
         require(_treasuryWallet != address(0), "Factory: Treasury cannot be zero address");
         require(_priceFeedAddress != address(0), "Factory: Price feed cannot be zero address");
         
-        // Now passing all three required arguments
-        DegenPoolV2 newDegenPool = new DegenPoolV2(owner(), _treasuryWallet, _priceFeedAddress);
+        DegenPoolV2 newDegenPool = new DegenPoolV2(owner(), _treasuryWallet, _priceFeedAddress, _aprBps);
         
         address poolAddress = address(newDegenPool);
         degenPools.push(poolAddress);
@@ -55,16 +54,21 @@ contract PoolFactory is Ownable {
 
     function createPositivePool(
         address _assetAddress,
+        address _compoundMarketAddress,
+        address _rewardTokenAddress,
+        address _priceFeedAddress,
+        uint16 _flexMultiplierBps,
+        uint16 _lockedMultiplierBps,
         uint256 _lockDurationSeconds
     ) external onlyOwner returns (address) {
-        require(_assetAddress != address(0), "Factory: Invalid address");
-        require(_lockDurationSeconds > 0, "Factory: Lock duration must be > 0");
-
         PositivePoolVault newPositivePool = new PositivePoolVault(
             owner(),
             _assetAddress,
-            100, // FLEX_MULTIPLIER (1.0x)
-            150, // LOCKED_MULTIPLIER (1.5x)
+            _compoundMarketAddress,
+            _rewardTokenAddress,
+            _priceFeedAddress,
+            _flexMultiplierBps,
+            _lockedMultiplierBps,
             _lockDurationSeconds
         );
         address poolAddress = address(newPositivePool);
