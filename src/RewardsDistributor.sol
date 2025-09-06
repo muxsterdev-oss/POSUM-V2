@@ -2,112 +2,108 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./POSUM.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title RewardsDistributor
- * @author POSUM Protocol
- * @notice A contract to manage the linear release of community rewards over time.
+ * @notice Holds POSUM rewards and distributes them to authorized pools/users.
+ * - Owner funds the contract by transferring POSUM to this contract.
+ * - Authorized pools may call `notifySharesUpdate` to update user shares bookkeeping.
+ * - Users can call `harvest` to claim accumulated POSUM.
+ *
+ * Simple accumulator-per-share model (accPosumPerShare uses 1e12 precision).
  */
 contract RewardsDistributor is Ownable {
-    using SafeERC20 for POSUM;
+    IERC20 public immutable posum;
 
-    POSUM public immutable posumToken;
+    // precision
+    uint256 private constant PREC = 1e12;
 
-    struct RewardSchedule {
-        address destination;      // The pool contract receiving the rewards
-        uint256 totalAmount;        // Total amount for this schedule
-        uint256 releasedAmount;     // Amount already released
-        uint64 startTimestamp;      // When the schedule begins
-        uint64 durationSeconds;     // Total duration of the schedule
+    // authorized pools
+    mapping(address => bool) public isPool;
+
+    // accounting
+    uint256 public accPosumPerShare; // accumulated POSUM per share (PREC)
+    uint256 public totalShares;      // total shares across pools that we track
+
+    // per-user state
+    mapping(address => uint256) public userShares; // user -> shares (aggregated across pools)
+    mapping(address => int256)  public userDebt;   // user -> debt (accrued)
+
+    event Funded(address indexed from, uint256 amount);
+    event PoolAuthorized(address indexed pool, bool active);
+    event SharesUpdated(address indexed user, uint256 newUserShares, uint256 newTotalShares);
+    event Harvested(address indexed user, uint256 amount);
+
+    constructor(address _posum, address _owner) Ownable() {
+        require(_posum != address(0), "posum=0");
+        posum = IERC20(_posum);
+        transferOwnership(_owner);
     }
 
-    mapping(string => RewardSchedule) public rewardSchedules;
-    string[] public scheduleNames;
-
-    event RewardScheduleCreated(string indexed name, address indexed destination, uint256 totalAmount, uint64 duration);
-    event RewardsReleased(string indexed name, uint256 amount);
-
-    constructor(address _posumTokenAddress, address initialOwner) Ownable(initialOwner) {
-        require(_posumTokenAddress != address(0), "Token address cannot be zero");
-        posumToken = POSUM(_posumTokenAddress);
+    modifier onlyPool() {
+        require(isPool[msg.sender], "not authorized pool");
+        _;
     }
 
-    /**
-     * @notice Creates a new linear vesting schedule for a rewards pool.
-     * @param _name A unique name for the schedule (e.g., "DEGEN_POOL_SEASON_1").
-     * @param _destination The address of the pool contract that can claim these rewards.
-     * @param _totalAmount The total amount of POSUM to be distributed.
-     * @param _durationSeconds The total duration of the reward period.
-     */
-    function createRewardSchedule(
-        string memory _name,
-        address _destination,
-        uint256 _totalAmount,
-        uint64 _durationSeconds
-    ) external onlyOwner {
-        require(rewardSchedules[_name].startTimestamp == 0, "Schedule with this name already exists");
-        require(_destination != address(0), "Destination cannot be zero");
-        require(_totalAmount > 0, "Amount must be > 0");
-        require(_durationSeconds > 0, "Duration must be > 0");
-
-        rewardSchedules[_name] = RewardSchedule({
-            destination: _destination,
-            totalAmount: _totalAmount,
-            releasedAmount: 0,
-            startTimestamp: uint64(block.timestamp),
-            durationSeconds: _durationSeconds
-        });
-        scheduleNames.push(_name);
-        emit RewardScheduleCreated(_name, _destination, _totalAmount, _durationSeconds);
+    /// @notice Owner can mark a pool as authorized to call notifySharesUpdate
+    function setPool(address pool, bool active) external onlyOwner {
+        isPool[pool] = active;
+        emit PoolAuthorized(pool, active);
     }
 
-    /**
-     * @notice Allows a destination contract (e.g., DegenPool) to pull its available rewards.
-     * @param _name The name of the schedule to claim from.
-     */
-    function releaseRewards(string memory _name) external {
-        RewardSchedule storage schedule = rewardSchedules[_name];
-        require(msg.sender == schedule.destination, "Caller is not the destination for this schedule");
-
-        uint256 releasableAmount = getReleasableAmount(_name);
-        require(releasableAmount > 0, "No rewards available to release");
-
-        schedule.releasedAmount += releasableAmount;
-
-        posumToken.safeTransfer(msg.sender, releasableAmount);
-        emit RewardsReleased(_name, releasableAmount);
+    /// @notice Fund the distributor with POSUM. Owner should transfer POSUM before calling fund or call approve+transferFrom
+    function fund(uint256 amount) external onlyOwner {
+        require(amount > 0, "amount=0");
+        require(posum.transferFrom(msg.sender, address(this), amount), "transfer failed");
+        // immediately available for distribution; if totalShares>0, increase accPerShare
+        if (totalShares > 0) {
+            accPosumPerShare += (amount * PREC) / totalShares;
+        }
+        emit Funded(msg.sender, amount);
     }
 
-    /**
-     * @notice Calculates the amount of rewards available to be released for a given schedule.
-     * @param _name The name of the schedule.
-     * @return The amount of releasable POSUM tokens.
-     */
-    function getReleasableAmount(string memory _name) public view returns (uint256) {
-        RewardSchedule storage schedule = rewardSchedules[_name];
-        if (schedule.startTimestamp == 0) {
-            return 0;
+    /// @notice Pools call this when a user's share changes. Only callable by authorized pools.
+    /// @param user user address
+    /// @param newUserShares new aggregated share value for the user (pool must compute and pass)
+    /// @param harvestBefore if true, harvest pending rewards for user before changing shares
+    function notifySharesUpdate(address user, uint256 newUserShares, bool harvestBefore) external onlyPool {
+        if (harvestBefore) {
+            _harvest(user);
         }
 
-        uint256 vestedAmount = _getVestedAmount(_name);
-        return vestedAmount - schedule.releasedAmount;
+        // update totalShares and userShares & userDebt
+        totalShares = totalShares - userShares[user] + newUserShares;
+        userShares[user] = newUserShares;
+        // set debt to current snapshot
+        userDebt[user] = int256((userShares[user] * accPosumPerShare) / PREC);
+        emit SharesUpdated(user, newUserShares, totalShares);
     }
 
-    function _getVestedAmount(string memory _name) internal view returns (uint256) {
-        RewardSchedule storage schedule = rewardSchedules[_name];
+    /// @notice View pending rewards for a user
+    function pending(address user) public view returns (uint256) {
+        int256 accrued = int256((userShares[user] * accPosumPerShare) / PREC) - userDebt[user];
+        if (accrued <= 0) return 0;
+        return uint256(accrued);
+    }
 
-        if (block.timestamp < schedule.startTimestamp) {
-            return 0;
-        }
+    /// @notice Harvest POSUM rewards for caller
+    function harvest() external {
+        _harvest(msg.sender);
+    }
 
-        uint256 timeSinceStart = block.timestamp - schedule.startTimestamp;
-        if (timeSinceStart >= schedule.durationSeconds) {
-            return schedule.totalAmount;
-        }
+    function _harvest(address user) internal {
+        uint256 amt = pending(user);
+        if (amt == 0) return;
+        // update debt
+        userDebt[user] += int256(amt);
+        require(posum.transfer(user, amt), "posum transfer failed");
+        emit Harvested(user, amt);
+    }
 
-        return (schedule.totalAmount * timeSinceStart) / schedule.durationSeconds;
+    // Admin emergency: recover tokens accidentally sent (owner only)
+    function rescueToken(address token, address to, uint256 amount) external onlyOwner {
+        require(to != address(0), "zero");
+        IERC20(token).transfer(to, amount);
     }
 }
-
