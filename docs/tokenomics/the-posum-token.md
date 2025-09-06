@@ -1,9 +1,11 @@
-💎 The $POSUM Token
-The $POSUM token is the heart of the POSUM ecosystem, designed for utility, governance, and rewarding our most dedicated community members.
+The $POSUM Token
+The $POSUM token is the heart of the POSUM ecosystem, designed for utility, governance, and rewarding our dedicated community members.
 
-Total Supply: 100,000,000 $POSUM
+Total Supply: 200,000,000 $POSUM
 
-Official Token Allocation
+Allocation & Distribution
+Our tokenomics are designed for a fair, community-first launch that promotes long-term, sustainable growth.
+
 Recipient / Purpose
 
 Allocation
@@ -14,49 +16,49 @@ Distribution Mechanism
 
 Degen Pool Rewards
 
-40%
+35%
 
-40,000,000
+70,000,000
 
-Emitted weekly over several months to ETH stakers who have permanently locked their principal.
+Emitted in weekly epochs during the initial launch phase to users who have locked ETH.
 
-SUM Point Airdrop
+Positive Pool Rewards
 
 20%
 
-20,000,000
+40,000,000
 
-A one-time airdrop to Positive Pool stakers based on SUM points accumulated over time.
+Released linearly, month by month, to users based on their proportional share of SUM points earned from staking in the Positive Pool.
 
 Forage Rewards
 
 10%
 
-10,000,000
+20,000,000
 
-Airdropped alongside the Positive Pool rewards, based on SUM points earned from completing missions.
+Released linearly, month by month, alongside the Positive Pool rewards, based on SUM points earned from completing missions.
 
 Protocol Liquidity
 
-10%
+15%
 
-10,000,000
+30,000,000
 
-Paired with ETH and locked in a DEX to create a stable trading market for the $POSUM token.
+Paired with ETH and locked in a DEX to create a deep and stable trading market for the $POSUM token.
 
 Core Team & Advisors
 
 10%
 
-10,000,000
+20,000,000
 
-Vested over 3 years with a 1-year cliff to ensure long-term commitment.
+Vested over 3 years with a 6-month cliff to ensure long-term commitment.
 
 Community Treasury
 
 10%
 
-10,000,000
+20,000,000
 
 Held in a Gnosis Safe multisig for future growth initiatives (marketing, grants, bug bounties).
 

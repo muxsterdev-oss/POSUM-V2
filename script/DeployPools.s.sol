@@ -15,17 +15,11 @@ contract DeployPools is Script {
     address constant BASE_SEPOLIA_USDC_USD_PRICE_FEED = 0x16f5a0738A42a962A970966A39ac252579080A55;
     address constant UNISWAP_V2_ROUTER = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
 
-    function run()
-        external
-        returns (
-            PoolFactory,
-            DegenPoolV2,
-            PositivePoolVault
-        )
-    {
-        vm.startBroadcast();
+    function run() external {
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployerAddress = vm.addr(deployerPrivateKey);
 
-        address deployerAddress = msg.sender;
+        vm.startBroadcast(deployerPrivateKey);
 
         POSUM posumToken = new POSUM(deployerAddress);
         console.log("Deployed placeholder POSUM token at:", address(posumToken));
@@ -33,28 +27,23 @@ contract DeployPools is Script {
         PoolFactory factory = new PoolFactory(deployerAddress);
         console.log("PoolFactory deployed at:", address(factory));
 
-        DegenPoolV2 degenPool = DegenPoolV2(
-            factory.createDegenPool(
-                address(posumToken),
-                UNISWAP_V2_ROUTER,
-                BASE_SEPOLIA_ETH_USD_PRICE_FEED,
-                deployerAddress
-            )
+        factory.createDegenPool(
+            address(posumToken),
+            UNISWAP_V2_ROUTER,
+            BASE_SEPOLIA_ETH_USD_PRICE_FEED,
+            deployerAddress
         );
-        console.log("DegenPoolV2 created at:", address(degenPool));
-
-        PositivePoolVault positivePool = PositivePoolVault(
-            factory.createPositivePool(
-                BASE_SEPOLIA_USDC_TOKEN,
-                BASE_SEPOLIA_COMPOUND_MARKET,
-                BASE_SEPOLIA_COMP_TOKEN,
-                BASE_SEPOLIA_USDC_USD_PRICE_FEED
-            )
-        );
-        console.log("PositivePoolVault created at:", address(positivePool));
         
-        vm.stopBroadcast();
+        factory.createPositivePool(
+            BASE_SEPOLIA_USDC_TOKEN,
+            BASE_SEPOLIA_COMPOUND_MARKET,
+            BASE_SEPOLIA_COMP_TOKEN,
+            BASE_SEPOLIA_USDC_USD_PRICE_FEED
+        );
+        
+        console.log("DegenPoolV2 created at:", factory.degenPools(0));
+        console.log("PositivePoolVault created at:", factory.positivePoolVaults(0));
 
-        return (factory, degenPool, positivePool);
+        vm.stopBroadcast();
     }
 }

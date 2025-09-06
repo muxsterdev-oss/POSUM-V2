@@ -11,8 +11,8 @@ import PixelBackground from "@/app/components/PixelBackground";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 // --- CONTRACT ADDRESSES & ABIs ---
-const DEGEN_POOL_ADDRESS = '0xfB00Ae470aAd69286D1B110DFf4B918d0aA1cEDC'; 
-const POSITIVE_POOL_USDC_ADDRESS = '0x7c08441978AE877B2d8C360D09309083e669b0c1';
+const DEGEN_POOL_ADDRESS = '0x269c3B5F0feCFE8f78505A30bAB784e9f33E87aC'; 
+const POSITIVE_POOL_USDC_ADDRESS = '0xb1F9e283721E40D4135eE69Da1F6ccdc29B4107C';
 const CHAINLINK_ETH_USD_PRICE_FEED = '0x4aDC67696bA383F43DD60A9e78F2C97FbfB5D211';
 
 const DEGEN_POOL_ABI = [{"type":"constructor","inputs":[{"name":"initialOwner","type":"address","internalType":"address"},{"name":"initialTreasury","type":"address","internalType":"address"},{"name":"_priceFeedAddress","type":"address","internalType":"address"}],"stateMutability":"nonpayable"},{"type":"function","name":"getCurrentSumPoints","inputs":[{"name":"_user","type":"address","internalType":"address"}],"outputs":[{"name":"","type":"uint256","internalType":"uint256"}],"stateMutability":"view"},{"type":"function","name":"userShares","inputs":[{"name":"","type":"address","internalType":"address"}],"outputs":[{"name":"","type":"uint256","internalType":"uint256"}],"stateMutability":"view"}]; 

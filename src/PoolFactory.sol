@@ -1,4 +1,3 @@
-// src/PoolFactory.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -6,16 +5,21 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "./DegenPoolV2.sol";
 import "./PositivePoolVault.sol";
 
+/**
+ * @title PoolFactory
+ * @author POSUM Protocol
+ * @notice A factory contract to deploy and track official POSUM protocol pools.
+ */
 contract PoolFactory is Ownable {
     address[] public degenPools;
     address[] public positivePoolVaults;
 
-    enum PoolType { DEGEN, POSITIVE, IGNITION }
+    enum PoolType { DEGEN, POSITIVE }
 
     struct PoolInfo {
         PoolType poolType;
         address poolAddress;
-        address assetAddress;
+        address assetAddress; // For PositivePools, address(0) for DegenPools (ETH)
         uint256 createdAt;
     }
 
@@ -30,15 +34,22 @@ contract PoolFactory is Ownable {
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
+    /**
+     * @notice Deploys a new DegenPoolV2 contract based on the final blueprint.
+     */
     function createDegenPool(
-        address _treasuryWallet, 
+        address _posumTokenAddress,
+        address _uniswapRouterAddress,
         address _priceFeedAddress,
-        uint256 _aprBps
+        address _liquidityReceiver
     ) external onlyOwner returns (address) {
-        require(_treasuryWallet != address(0), "Factory: Treasury cannot be zero address");
-        require(_priceFeedAddress != address(0), "Factory: Price feed cannot be zero address");
-        
-        DegenPoolV2 newDegenPool = new DegenPoolV2(owner(), _treasuryWallet, _priceFeedAddress, _aprBps);
+        DegenPoolV2 newDegenPool = new DegenPoolV2(
+            owner(),
+            _posumTokenAddress,
+            _uniswapRouterAddress,
+            _priceFeedAddress,
+            _liquidityReceiver
+        );
         
         address poolAddress = address(newDegenPool);
         degenPools.push(poolAddress);
@@ -52,24 +63,21 @@ contract PoolFactory is Ownable {
         return poolAddress;
     }
 
+    /**
+     * @notice Deploys a new, flexible-only PositivePoolVault contract.
+     */
     function createPositivePool(
         address _assetAddress,
         address _compoundMarketAddress,
         address _rewardTokenAddress,
-        address _priceFeedAddress,
-        uint16 _flexMultiplierBps,
-        uint16 _lockedMultiplierBps,
-        uint256 _lockDurationSeconds
+        address _priceFeedAddress
     ) external onlyOwner returns (address) {
         PositivePoolVault newPositivePool = new PositivePoolVault(
             owner(),
             _assetAddress,
             _compoundMarketAddress,
             _rewardTokenAddress,
-            _priceFeedAddress,
-            _flexMultiplierBps,
-            _lockedMultiplierBps,
-            _lockDurationSeconds
+            _priceFeedAddress
         );
         address poolAddress = address(newPositivePool);
 
@@ -92,3 +100,4 @@ contract PoolFactory is Ownable {
         return positivePoolVaults.length;
     }
 }
+

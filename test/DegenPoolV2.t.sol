@@ -4,101 +4,102 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "src/DegenPoolV2.sol";
+import "src/POSUM.sol";
+import "src/interfaces/IChainlink.sol";
+
+// --- Mocks for testing ---
+contract MockUniswapRouter {
+    function addLiquidityETH(address token, uint, uint, uint, address, uint) external payable returns (uint, uint, uint) {
+        POSUM(token).transferFrom(msg.sender, address(this), 1); // Simulate taking some token
+        return (1, 1, 1);
+    }
+}
+
+contract MockPriceFeed is AggregatorV3Interface {
+    function decimals() external pure returns (uint8) { return 8; }
+    
+    // --- CORRECTED THIS LINE from 'pure' to 'view' ---
+    function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
+        return (1, 2000 * 1e8, block.timestamp, block.timestamp, 1); // Simulate $2000 ETH price
+    }
+}
 
 contract DegenPoolV2Test is Test {
     DegenPoolV2 degenPool;
-    address owner = address(0x1);
-    address user1 = address(0x2);
-    address treasury = address(0x3);
-    
-    address constant BASE_SEPOLIA_ETH_USD_PRICE_FEED = 0x4adc67696bA383F43dd60a9E78F2C97fbfB5d211;
+    POSUM posumToken;
+    address owner = address(this);
+    address user1 = address(0x123);
+    address liquidityReceiver = address(0x456);
 
     function setUp() public {
-        vm.createSelectFork("baseSepolia");
+        posumToken = new POSUM(address(this));
+        MockUniswapRouter router = new MockUniswapRouter();
+        MockPriceFeed priceFeed = new MockPriceFeed();
 
-        // --- UPDATED CONSTRUCTOR CALL ---
         degenPool = new DegenPoolV2(
-            owner, 
-            treasury, 
-            BASE_SEPOLIA_ETH_USD_PRICE_FEED,
-            10000 // 100% APR
+            owner,
+            address(posumToken),
+            address(router),
+            address(priceFeed),
+            liquidityReceiver
         );
-        
+
+        // Fund the degen pool with POSUM for liquidity pairing
+        posumToken.transfer(address(degenPool), 1_000_000 * 1e18);
         vm.deal(user1, 10 ether);
-        vm.deal(address(degenPool), 100 ether);
-        vm.deal(treasury, 10 ether);
     }
 
-    function testDeposit() public {
-        vm.prank(user1);
-        degenPool.deposit{value: 1 ether}();
-        assertEq(degenPool.userShares(user1), 1 ether);
-        assertEq(degenPool.totalDeposited(), 1 ether);
+    function test_Deposit_SplitsFundsAndLocks() public {
+        uint256 depositAmount = 1 ether;
+
+        vm.startPrank(user1);
+        degenPool.deposit{value: depositAmount}();
+        vm.stopPrank();
+
+        assertEq(degenPool.userDeposits(user1), depositAmount, "Total deposit not recorded");
+        assertEq(degenPool.userPrincipalClaimable(user1), depositAmount / 2, "Claimable principal is not 50%");
+        assertTrue(degenPool.userUnlockTimestamp(user1) > block.timestamp, "Unlock timestamp not set");
     }
 
-    function testClaimYield() public {
-        vm.prank(owner);
-        degenPool.fundRewards{value: 5 ether}();
+    function test_FoundersWeek_Cap() public {
+        vm.startPrank(user1);
+        degenPool.deposit{value: 1 ether}(); // First deposit is fine
 
-        vm.prank(user1);
-        degenPool.deposit{value: 1 ether}();
-
-        vm.warp(block.timestamp + 365 days);
-
-        uint256 claimableBefore = degenPool.getTotalClaimable(user1);
-        assertTrue(claimableBefore > 0, "Claimable should be greater than zero");
-
-        vm.prank(user1);
-        degenPool.claim();
-
-        assertEq(degenPool.getTotalClaimable(user1), 0, "Claimable should be zero after claim");
-    }
-
-    function testClaimRevertsWhenInsufficientFundedRewards() public {
-        vm.prank(user1);
-        degenPool.deposit{value: 1 ether}();
-
-        vm.warp(block.timestamp + 365 days);
-
-        vm.expectRevert("DegenPool: Insufficient reward pool");
-        vm.prank(user1);
-        degenPool.claim();
-    }
-
-    function testFundingThenClaimSucceeds() public {
-        uint256 initialUserBalance = user1.balance;
-        uint256 initialTreasuryBalance = treasury.balance;
-        uint256 fundingAmount = 5 ether;
-
-        vm.prank(owner);
-        degenPool.fundRewards{value: fundingAmount}();
-        assertEq(degenPool.rewardPool(), fundingAmount);
-
-        vm.prank(user1);
-        degenPool.deposit{value: 1 ether}();
-
-        vm.warp(block.timestamp + 365 days);
-
-        uint256 claimableAmount = degenPool.getTotalClaimable(user1);
-        uint256 feeAmount = (claimableAmount * degenPool.TREASURY_FEE_BPS()) / 10000;
-        uint256 userAmount = claimableAmount - feeAmount;
-
-        vm.prank(user1);
-        degenPool.claim();
+        // Second deposit should fail if it exceeds the cap
+        vm.expectRevert("Exceeds Founder's Week cap");
+        degenPool.deposit{value: 0.1 ether}();
+        vm.stopPrank();
         
-        assertTrue(user1.balance > initialUserBalance, "User balance should increase");
-        assertEq(treasury.balance, initialTreasuryBalance + feeAmount, "Treasury did not receive correct fee");
-        assertEq(degenPool.rewardPool(), fundingAmount - claimableAmount, "Reward pool not debited correctly");
+        // After 7 days, the cap should be lifted
+        vm.warp(block.timestamp + 8 days);
+
+        vm.startPrank(user1);
+        degenPool.deposit{value: 0.1 ether}(); // Should now succeed
+        vm.stopPrank();
+
+        assertEq(degenPool.userDeposits(user1), 1.1 ether);
     }
 
-    function testStalePriceReverts() public {
-        vm.prank(user1);
+    function test_ClaimPrincipal_AfterLock() public {
+        vm.startPrank(user1);
         degenPool.deposit{value: 1 ether}();
+        vm.stopPrank();
         
-        vm.warp(block.timestamp + 2 hours);
+        // Should fail before lock expires
+        vm.expectRevert("Lock period not expired");
+        vm.prank(user1);
+        degenPool.claimPrincipal();
+        
+        // Should succeed after lock expires
+        vm.warp(block.timestamp + 91 days);
+        
+        uint256 userBalanceBefore = user1.balance;
+        
+        vm.prank(user1);
+        degenPool.claimPrincipal();
 
-        vm.expectRevert("DegenPool: Stale price from oracle");
-        degenPool.getCurrentSumPoints(user1);
+        assertEq(degenPool.userPrincipalClaimable(user1), 0, "Claimable principal should be zero after claim");
+        assertEq(user1.balance, userBalanceBefore + 0.5 ether, "User did not receive correct principal");
     }
 }
 

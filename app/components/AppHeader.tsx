@@ -24,7 +24,6 @@ export default function AppHeader() {
     { href: '/forage', label: 'Forage' },
     { href: '/pools', label: 'Pools' },
     { href: '/roadmap', label: 'Roadmap' },
-
   ];
 
   return (
@@ -64,3 +63,4 @@ export default function AppHeader() {
     </header>
   );
 }
+

@@ -6,8 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Checkbox } from './ui/checkbox';
-import { Label } from './ui/label';
+// --- REMOVED Checkbox and Label imports ---
 import { parseUnits } from 'viem';
 import { useBalance } from 'wagmi';
 import { useAccount } from 'wagmi';
@@ -24,7 +23,8 @@ interface ActionModalProps {
   actionType: 'Deposit' | 'Withdraw' | 'Claim';
   poolName: string;
   tokenOptions?: TokenOption[];
-  onSubmit: (amount: string, selectedToken: TokenOption, isLocked?: boolean) => void;
+  // --- REMOVED isLocked from onSubmit ---
+  onSubmit: (amount: string, selectedToken: TokenOption) => void;
   isLoading: boolean;
   allowance?: bigint;
   onApprove?: (amount: string) => void;
@@ -43,7 +43,7 @@ export default function ActionModal({
 }: ActionModalProps) {
   const [amount, setAmount] = useState('');
   const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(tokenOptions[0]?.symbol || '');
-  const [isLocked, setIsLocked] = useState(false);
+  // --- REMOVED isLocked state ---
   const { address } = useAccount();
 
   useEffect(() => {
@@ -77,7 +77,8 @@ export default function ActionModal({
     if (needsApproval && onApprove) {
       onApprove(amount);
     } else {
-      onSubmit(amount, selectedToken, isLocked);
+      // --- REMOVED isLocked from onSubmit call ---
+      onSubmit(amount, selectedToken);
     }
   };
 
@@ -143,19 +144,7 @@ export default function ActionModal({
                     />
                   </div>
 
-                  {poolName.includes('Positive') && actionType === 'Deposit' && (
-                    <div className="flex items-center space-x-2">
-                      <Checkbox 
-                        id="lock-deposit" 
-                        checked={isLocked}
-                        onCheckedChange={(checked) => setIsLocked(checked as boolean)}
-                        className="border-gray-600"
-                      />
-                      <Label htmlFor="lock-deposit" className="text-sm text-gray-300">
-                        Lock deposit for 30 days (1.5x SUM multiplier)
-                      </Label>
-                    </div>
-                  )}
+                  {/* --- REMOVED THE ENTIRE CHECKBOX SECTION --- */}
                   
                   <Button
                     onClick={handleSubmit}
