@@ -2,102 +2,49 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./DegenPoolV2.sol";
-import "./PositivePoolVault.sol";
 
 /**
- * @title PoolFactory
- * @author POSUM Protocol
- * @notice A factory contract to deploy and track official POSUM protocol pools.
+ * @title PoolFactory (MVP)
+ * @notice Simple factory to deploy DegenPool & PositivePool (using known bytecode clones or direct).
+ * For now this factory will only register pool addresses and authorize them in SUMPoints.
+ *
+ * NOTE: For simplicity we assume DegenPool and PositivePool constructors are called externally or deployed
+ * and then registered via this factory. You can expand to actually `new` them from here later.
  */
 contract PoolFactory is Ownable {
-    address[] public degenPools;
-    address[] public positivePoolVaults;
+    address[] public pools;
+    address public sumPoints;
 
-    enum PoolType { DEGEN, POSITIVE }
+    event PoolRegistered(address indexed pool);
+    event SetSumPoints(address indexed sp);
 
-    struct PoolInfo {
-        PoolType poolType;
-        address poolAddress;
-        address assetAddress; // For PositivePools, address(0) for DegenPools (ETH)
-        uint256 createdAt;
+    constructor(address _owner, address _sumPoints) {
+        transferOwnership(_owner);
+        sumPoints = _sumPoints;
     }
 
-    mapping(address => PoolInfo) public poolInfo;
-
-    event PoolCreated(
-        PoolType indexed poolType,
-        address indexed poolAddress,
-        address assetAddress,
-        address creator
-    );
-
-    constructor(address initialOwner) Ownable(initialOwner) {}
-
-    /**
-     * @notice Deploys a new DegenPoolV2 contract based on the final blueprint.
-     */
-    function createDegenPool(
-        address _posumTokenAddress,
-        address _uniswapRouterAddress,
-        address _priceFeedAddress,
-        address _liquidityReceiver
-    ) external onlyOwner returns (address) {
-        DegenPoolV2 newDegenPool = new DegenPoolV2(
-            owner(),
-            _posumTokenAddress,
-            _uniswapRouterAddress,
-            _priceFeedAddress,
-            _liquidityReceiver
-        );
-        
-        address poolAddress = address(newDegenPool);
-        degenPools.push(poolAddress);
-        poolInfo[poolAddress] = PoolInfo({
-            poolType: PoolType.DEGEN,
-            poolAddress: poolAddress,
-            assetAddress: address(0), // ETH pool
-            createdAt: block.timestamp
-        });
-        emit PoolCreated(PoolType.DEGEN, poolAddress, address(0), owner());
-        return poolAddress;
+    function setSumPoints(address _sum) external onlyOwner {
+        sumPoints = _sum;
+        emit SetSumPoints(_sum);
     }
 
-    /**
-     * @notice Deploys a new, flexible-only PositivePoolVault contract.
-     */
-    function createPositivePool(
-        address _assetAddress,
-        address _compoundMarketAddress,
-        address _rewardTokenAddress,
-        address _priceFeedAddress
-    ) external onlyOwner returns (address) {
-        PositivePoolVault newPositivePool = new PositivePoolVault(
-            owner(),
-            _assetAddress,
-            _compoundMarketAddress,
-            _rewardTokenAddress,
-            _priceFeedAddress
-        );
-        address poolAddress = address(newPositivePool);
+    // register an existing pool; factory will optionally call SUMPoints.setAuthorized(pool, true)
+    function registerPool(address pool) external onlyOwner {
+        require(pool != address(0), "zero");
+        pools.push(pool);
 
-        positivePoolVaults.push(poolAddress);
-        poolInfo[poolAddress] = PoolInfo({
-            poolType: PoolType.POSITIVE,
-            poolAddress: poolAddress,
-            assetAddress: _assetAddress,
-            createdAt: block.timestamp
-        });
-        emit PoolCreated(PoolType.POSITIVE, poolAddress, _assetAddress, owner());
-        return poolAddress;
+        // if sumPoints supports setAuthorized(pool,true) we can call it (best-effort)
+        if (sumPoints != address(0)) {
+            // attempt to call setAuthorized(address,bool) on sumPoints (owner must be factory or multisig)
+            // This is best-effort; it will not revert factory if call fails
+            (bool ok, ) = sumPoints.call(abi.encodeWithSignature("setAuthorized(address,bool)", pool, true));
+            // ignore ok result
+        }
+
+        emit PoolRegistered(pool);
     }
 
-    function getDegenPoolCount() external view returns (uint256) {
-        return degenPools.length;
-    }
-
-    function getPositivePoolCount() external view returns (uint256) {
-        return positivePoolVaults.length;
+    function allPools() external view returns (address[] memory) {
+        return pools;
     }
 }
-
