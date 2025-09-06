@@ -2,91 +2,33 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./POSUM.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
- * @title TokenDistributor
- * @author POSUM Protocol
- * @notice A contract to distribute the initial POSUM token supply according to the tokenomics plan.
+ * @title TokenDistributor (Testnet helper)
+ * @notice Simple owner-only distributor to split initial POSUM supply to given addresses.
+ * - Owner must have POSUM balance and must approve this contract to transferFrom, or transfer POSUM into this contract and call distributeFromThis.
  */
 contract TokenDistributor is Ownable {
-    using SafeERC20 for POSUM;
+    IERC20 public immutable posum;
 
-    POSUM public immutable posumToken;
+    event Distributed(address indexed to, uint256 amount);
 
-    // --- Tokenomics Allocations (Based on 200M total supply) ---
-    uint256 public constant TEAM_ALLOCATION = 20_000_000 * (10 ** 18);      // 10%
-    uint256 public constant REWARDS_ALLOCATION = 130_000_000 * (10 ** 18); // 65% (Degen + Positive + Forage)
-    uint256 public constant LIQUIDITY_ALLOCATION = 30_000_000 * (10 ** 18);  // 15%
-    uint256 public constant TREASURY_ALLOCATION = 20_000_000 * (10 ** 18);  // 10%
-
-    bool public hasDistributedTeamTokens;
-    bool public hasDistributedRewardsTokens;
-    bool public hasDistributedLiquidityTokens;
-    bool public hasDistributedTreasuryTokens;
-
-    event TokensDistributed(string indexed allocation, address indexed destination, uint256 amount);
-
-    constructor(address _posumTokenAddress, address initialOwner) Ownable(initialOwner) {
-        require(_posumTokenAddress != address(0), "Token address cannot be zero");
-        posumToken = POSUM(_posumTokenAddress);
-        
-        uint256 expectedSupply = TEAM_ALLOCATION + REWARDS_ALLOCATION + LIQUIDITY_ALLOCATION + TREASURY_ALLOCATION;
-        require(posumToken.TOTAL_SUPPLY() == expectedSupply, "Allocation amounts do not match total supply");
-        require(posumToken.balanceOf(address(this)) >= expectedSupply, "Distributor must hold total supply");
+    constructor(address _posum, address _owner) {
+        require(_posum != address(0), "posum=0");
+        posum = IERC20(_posum);
+        transferOwnership(_owner);
     }
 
-    /**
-     * @notice Distributes the team's token allocation to the vesting contract.
-     * @param _vestingContract The address of the deployed TeamVesting contract.
-     */
-    function distributeTeamTokens(address _vestingContract) external onlyOwner {
-        require(!hasDistributedTeamTokens, "Team tokens already distributed");
-        
-        posumToken.safeTransfer(_vestingContract, TEAM_ALLOCATION);
-        hasDistributedTeamTokens = true;
-
-        emit TokensDistributed("Team/Advisors", _vestingContract, TEAM_ALLOCATION);
+    // distribute by pulling from owner (owner must approve this contract earlier)
+    function distributeFromOwner(address to, uint256 amount) external onlyOwner {
+        require(posum.transferFrom(msg.sender, to, amount), "transferFrom failed");
+        emit Distributed(to, amount);
     }
 
-    /**
-     * @notice Distributes the community rewards allocation to the RewardsDistributor contract.
-     * @param _rewardsContract The address of the deployed RewardsDistributor contract.
-     */
-    function distributeRewards(address _rewardsContract) external onlyOwner {
-        require(!hasDistributedRewardsTokens, "Rewards tokens already distributed");
-        
-        posumToken.safeTransfer(_rewardsContract, REWARDS_ALLOCATION);
-        hasDistributedRewardsTokens = true;
-
-        emit TokensDistributed("Community Rewards", _rewardsContract, REWARDS_ALLOCATION);
-    }
-
-    /**
-     * @notice Distributes the protocol liquidity allocation to a specified address (e.g., a multisig).
-     * @param _liquidityManager The address that will manage the protocol's liquidity.
-     */
-    function distributeLiquidity(address _liquidityManager) external onlyOwner {
-        require(!hasDistributedLiquidityTokens, "Liquidity tokens already distributed");
-        
-        posumToken.safeTransfer(_liquidityManager, LIQUIDITY_ALLOCATION);
-        hasDistributedLiquidityTokens = true;
-        
-        emit TokensDistributed("Protocol Liquidity", _liquidityManager, LIQUIDITY_ALLOCATION);
-    }
-
-    /**
-     * @notice Distributes the treasury allocation to the community treasury (Gnosis Safe).
-     * @param _treasuryAddress The address of the community treasury.
-     */
-    function distributeTreasury(address _treasuryAddress) external onlyOwner {
-        require(!hasDistributedTreasuryTokens, "Treasury tokens already distributed");
-        
-        posumToken.safeTransfer(_treasuryAddress, TREASURY_ALLOCATION);
-        hasDistributedTreasuryTokens = true;
-
-        emit TokensDistributed("Community Treasury", _treasuryAddress, TREASURY_ALLOCATION);
+    // distribute from this contract's balance (owner first transfers tokens here)
+    function distributeFromThis(address to, uint256 amount) external onlyOwner {
+        require(posum.transfer(to, amount), "transfer failed");
+        emit Distributed(to, amount);
     }
 }
-
